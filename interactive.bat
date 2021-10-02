@@ -1,1 +1,1 @@
-"bin/ycolorgrade.exe" --interactive --image tests/greg_zaal_artist_workshop.hdr
+"bin/ycolorgrade.exe" --interactive --image tests/toa_heftiba_people.jpg

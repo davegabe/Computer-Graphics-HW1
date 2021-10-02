@@ -71,15 +71,14 @@ void contrast(vec4f& c, float contrast) { c = gain(c, 1 - contrast); }
 void vignette(vec4f& c, float vignette, int n, int width, int height) {
   auto  vr   = 1 - vignette;
   int   i    = n % width;
-  int   j    = n / width;
+  int   j    = floor(n / width);
   vec2f ij   = {i, j};
   vec2f size = {width, height};
   c          *= (1 - smoothstep(vr, 2 * vr,
                    length(ij - size / 2) / length(size / 2)));  //!!!!!!!!!
 }
 
-void filmGrain(vec4f& c, float grain) {
-  auto rng = make_rng(172784);
+void filmGrain(vec4f& c, rng_state& rng, float grain) {
   c += (rand1f(rng) - 0.5) * grain;
 }
 
@@ -87,8 +86,8 @@ void mosaic(vec4f& c, const color_image& image, int mosaic, int n, int width,
     int height) {
   if (mosaic != 0) {
     int i = n % width;
-    int j = n / width;
-    c     = get_pixel(image, i - (i % mosaic), j - (j % mosaic));
+    int j = floor(n / width);
+    c     = image[{i - i % mosaic, j - j % mosaic}];
   }
 }
 
@@ -96,7 +95,7 @@ void grid(vec4f& c, const color_image& image, int grid, int n, int width,
     int height) {
   if (grid != 0) {
     int i = n % width;
-    int j = n / width;
+    int j = floor(n / width);
     if (0 == i % grid || 0 == j % grid) {
       c *= 0.5;
     }
@@ -106,16 +105,21 @@ void grid(vec4f& c, const color_image& image, int grid, int n, int width,
 color_image grade_image(const color_image& image, const grade_params& params) {
   auto graded = image;
   int  n      = 0;
+  auto rng    = make_rng(172784);
   for (auto& pixel : graded.pixels) {
-    n++;
     toneMapping(pixel, params.exposure, params.filmic, params.srgb);
     colorTint(pixel, params.tint);
     saturation(pixel, params.saturation);
     contrast(pixel, params.contrast);
     vignette(pixel, params.vignette, n, graded.width, graded.height);
-    filmGrain(pixel, params.grain);
+    filmGrain(pixel, rng, params.grain);
     mosaic(pixel, graded, params.mosaic, n, graded.width, graded.height);
+    n++;
+  }
+  n = 0;
+  for (auto& pixel : graded.pixels) {
     grid(pixel, graded, params.grid, n, graded.width, graded.height);
+    n++;
   }
   return graded;
 }
