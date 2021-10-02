@@ -40,59 +40,55 @@
 // -----------------------------------------------------------------------------
 namespace yocto {
 
-void toneMapping(vec4f& c, float exposure, bool filmic, bool srgb) {
-  // Exposure compensation
+vec3f toneMapping(vec3f c, float exposure, bool filmic, bool srgb) {
   c *= pow(2, exposure);
-  // Filmic correction
   if (filmic) {
     c *= 0.6;
     c = (pow(c, 2) * 2.51 + c * 0.03) / (pow(c, 2) * 2.43 + c * 0.59 + 0.14);
   }
-  // Srgb color space
   if (srgb) {
     c = pow(c, 1 / 2.2);
   }
-  // Clamp result
-  c = max(min(c, 1), 0);
+  c = clamp(c, 0, 1);
+  return c;
 }
 
-void colorTint(vec4f& c, vec3f tint) {
-  vec4f tintA = {tint.x, tint.y, tint.z, 1};
-  c           = c * tintA;
-}
+vec3f colorTint(vec3f c, vec3f tint) { return c * tint; }
 
-void saturation(vec4f& c, float saturation) {
+vec3f saturation(vec3f c, float saturation) {
   auto g = (c.x + c.y + c.z) / 3;
   c      = g + (c - g) * (saturation * 2);
+  return c;
 }
 
-void contrast(vec4f& c, float contrast) { c = gain(c, 1 - contrast); }
+vec3f contrast_c(vec3f c, float contrast) { return gain(c, 1 - contrast); }
 
-void vignette(vec4f& c, float vignette, int n, int width, int height) {
+vec3f vignette(vec3f c, float vignette, int n, int width, int height) {
   auto  vr   = 1 - vignette;
   int   i    = n % width;
   int   j    = floor(n / width);
   vec2f ij   = {i, j};
   vec2f size = {width, height};
-  c          *= (1 - smoothstep(vr, 2 * vr,
-                   length(ij - size / 2) / length(size / 2)));  //!!!!!!!!!
+  return c *
+         (1 - smoothstep(vr, 2 * vr, length(ij - size / 2) / length(size / 2)));
 }
 
-void filmGrain(vec4f& c, rng_state& rng, float grain) {
-  c += (rand1f(rng) - 0.5) * grain;
+vec3f filmGrain(vec3f c, rng_state& rng, float grain) {
+  return c + (rand1f(rng) - 0.5) * grain;
 }
 
-void mosaic(vec4f& c, const color_image& image, int mosaic, int n, int width,
+vec3f mosaic(vec3f c, const color_image& image, int mosaic, int n, int width,
     int height) {
   if (mosaic != 0) {
     int i = n % width;
     int j = floor(n / width);
-    c     = image[{i - i % mosaic, j - j % mosaic}];
+    c     = xyz(image[{i - i % mosaic, j - j % mosaic}]);
   }
+  return c;
 }
 
-void grid(vec4f& c, const color_image& image, int grid, int n, int width,
-    int height) {
+vec3f grid(
+    vec3f c, const color_image& image, int grid, int n, int width, int height) {
   if (grid != 0) {
     int i = n % width;
     int j = floor(n / width);
@@ -100,25 +96,38 @@ void grid(vec4f& c, const color_image& image, int grid, int n, int width,
       c *= 0.5;
     }
   }
+  return c;
 }
 
 color_image grade_image(const color_image& image, const grade_params& params) {
   auto graded = image;
   int  n      = 0;
   auto rng    = make_rng(172784);
-  for (auto& pixel : graded.pixels) {
-    toneMapping(pixel, params.exposure, params.filmic, params.srgb);
-    colorTint(pixel, params.tint);
-    saturation(pixel, params.saturation);
-    contrast(pixel, params.contrast);
-    vignette(pixel, params.vignette, n, graded.width, graded.height);
-    filmGrain(pixel, rng, params.grain);
-    mosaic(pixel, graded, params.mosaic, n, graded.width, graded.height);
+  for (auto pixel : graded.pixels) {
+    auto c = xyz(pixel);
+    c      = toneMapping(c, params.exposure, params.filmic, params.srgb);
+    c      = colorTint(c, params.tint);
+    c      = saturation(c, params.saturation);
+    c      = contrast(c, params.contrast);
+    c      = vignette(c, params.vignette, n, graded.width, graded.height);
+    c      = filmGrain(c, rng, params.grain);
+    graded.pixels[n] = vec4f{c.x, c.y, c.z, pixel.w};
     n++;
   }
+
   n = 0;
-  for (auto& pixel : graded.pixels) {
-    grid(pixel, graded, params.grid, n, graded.width, graded.height);
+  for (auto pixel : graded.pixels) {
+    auto c = xyz(pixel);
+    c      = mosaic(c, graded, params.mosaic, n, graded.width, graded.height);
+    graded.pixels[n] = vec4f{c.x, c.y, c.z, pixel.w};
+    n++;
+  }
+
+  n = 0;
+  for (auto pixel : graded.pixels) {
+    auto c = xyz(pixel);
+    c      = grid(c, graded, params.grid, n, graded.width, graded.height);
+    graded.pixels[n] = vec4f{c.x, c.y, c.z, pixel.w};
     n++;
   }
   return graded;
