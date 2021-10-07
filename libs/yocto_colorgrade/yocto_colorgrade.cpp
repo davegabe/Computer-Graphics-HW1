@@ -105,9 +105,38 @@ bool comparatore(const vec4f a, const vec4f b) {
 
 void sketch(color_image& image) {
   for (auto& pixel : image.pixels) {
-    float r          = sin(pixel.x * 6.28 * .9);
-    auto  c          = smoothstep(0, 0.8f, 1 - pow(r, 6));
-    pixel            = vec4f{c, c, c, pixel.w};
+    float r = sin(pixel.x * 6.28 * .9);
+    auto  c = smoothstep(0, 0.8f, 1 - pow(r, 6));
+    pixel   = vec4f{c, c, c, pixel.w};
+  }
+}
+
+void vhs(color_image& image) {
+  auto image_clone = image;
+  for (int i = 0; i < image.width; i++) {
+    for (int j = 0; j < image.height; j++) {
+      float x  = static_cast<float>(i) / image.width;
+      float y  = static_cast<float>(j) / image.height;
+      vec2f uv = vec2f{x, y};
+      float d  = length(uv - vec2f{0.5, 0.5});
+
+      float blur = 0.01;
+
+      float x_b   = uv.x + blur;
+      float x_b_l = uv.x - blur;
+      vec3f c     = {eval_image(image_clone, vec2f{x_b, uv.y}).x,
+          eval_image(image_clone, uv).y,
+          eval_image(image_clone, vec2f{x_b_l, uv.y}).z};
+
+      // scanline
+      float scanline = sin(uv.y * 400) * 0.08;
+      c -= scanline;
+
+      // vignette
+      c *= 1.0 - d * 0.5;
+
+      image[{i, j}] = vec4f{c.x, c.y, c.z, image[{i, j}].w};
+    }
   }
 }
 
@@ -143,18 +172,13 @@ color_image grade_image(const color_image& image, const grade_params& params) {
     graded.pixels[n] = vec4f{c.x, c.y, c.z, pixel.w};
     n++;
   }
+  if (params.mosaic != 0) mosaic(graded, params.mosaic);
 
-  if (params.mosaic != 0) {
-    mosaic(graded, params.mosaic);
-  }
+  if (params.grid != 0) grid(graded, params.grid);
 
-  if (params.grid != 0) {
-    grid(graded, params.grid);
-  }
+  if (params.sketch) sketch(graded);
 
-  if (params.sketch) {
-    sketch(graded);
-  }
+  if (params.vhs) vhs(graded);
 
   return graded;
 }

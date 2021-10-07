@@ -54,6 +54,7 @@ struct grade_params {
   int   mosaic     = 0;
   int   grid       = 0;
   bool  sketch     = false;
+  bool  vhs        = false;
 };
 
 // Grading functions
