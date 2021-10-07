@@ -106,6 +106,7 @@ void run_interactively(
       edited += draw_glslider("grain", params.grain, 0, 1);
       edited += draw_glslider("mosaic", params.mosaic, 0, 64);
       edited += draw_glslider("grid", params.grid, 0, 64);
+       edited += draw_glcheckbox("sketch", params.sketch);
       end_glheader();
       if (edited) {
         display = grade_image(image, params);

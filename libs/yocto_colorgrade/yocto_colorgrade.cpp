@@ -77,27 +77,56 @@ vec3f filmGrain(vec3f c, rng_state& rng, float grain) {
   return c + (rand1f(rng) - 0.5) * grain;
 }
 
-vec3f mosaic(vec3f c, const color_image& image, int mosaic, int n, int width,
-    int height) {
-  if (mosaic != 0) {
-    int i = n % width;
-    int j = floor(n / width);
-    c     = xyz(image[{i - i % mosaic, j - j % mosaic}]);
-  }
-  return c;
-}
-
-vec3f grid(
-    vec3f c, const color_image& image, int grid, int n, int width, int height) {
-  if (grid != 0) {
-    int i = n % width;
-    int j = floor(n / width);
-    if (0 == i % grid || 0 == j % grid) {
-      c *= 0.5;
+void mosaic(color_image& image, int mosaic) {
+  for (int i = 0; i < image.width; i++) {
+    for (int j = 0; j < image.height; j++) {
+      auto c        = xyz(image[{i, j}]);
+      c             = xyz(image[{i - i % mosaic, j - j % mosaic}]);
+      image[{i, j}] = vec4f{c.x, c.y, c.z, image[{i, j}].w};
     }
   }
-  return c;
 }
+
+void grid(color_image& image, int grid) {
+  for (int i = 0; i < image.width; i++) {
+    for (int j = 0; j < image.height; j++) {
+      auto c = xyz(image[{i, j}]);
+      if (0 == i % grid || 0 == j % grid) {
+        c *= 0.5;
+      }
+      image[{i, j}] = vec4f{c.x, c.y, c.z, image[{i, j}].w};
+    }
+  }
+}
+
+bool comparatore(const vec4f a, const vec4f b) {
+  return (a.x + a.y + a.z) < (b.x + b.y + b.z);
+};
+
+void sketch(color_image& image) {
+  for (auto& pixel : image.pixels) {
+    float r          = sin(pixel.x * 6.28 * .9);
+    auto  c          = smoothstep(0, 0.8f, 1 - pow(r, 6));
+    pixel            = vec4f{c, c, c, pixel.w};
+  }
+}
+
+// void sort(color_image& image, rng_state& rng) {
+//  auto imagec = image;
+//  int  col = image.width, row = image.height;
+//  std::sort(imagec.pixels.begin(), imagec.pixels.end(), comparatore);
+//  for (int i = 0; i < image.width; i+=5) {
+//    if (rand1i(rng, 2) == 1) {
+//      int j_S = rand1i(rng, image.height);
+//      for (int n = 0; n < 50 && i < image.width; n++) {
+//        for (int j = j_S; j < image.height; j++) {
+//          image[{i, j}] = imagec[{i, j}];
+//        }
+//        i++;
+//      }
+//    }
+//  }
+//}
 
 color_image grade_image(const color_image& image, const grade_params& params) {
   auto graded = image;
@@ -115,21 +144,18 @@ color_image grade_image(const color_image& image, const grade_params& params) {
     n++;
   }
 
-  n = 0;
-  for (auto pixel : graded.pixels) {
-    auto c = xyz(pixel);
-    c      = mosaic(c, graded, params.mosaic, n, graded.width, graded.height);
-    graded.pixels[n] = vec4f{c.x, c.y, c.z, pixel.w};
-    n++;
+  if (params.mosaic != 0) {
+    mosaic(graded, params.mosaic);
   }
 
-  n = 0;
-  for (auto pixel : graded.pixels) {
-    auto c = xyz(pixel);
-    c      = grid(c, graded, params.grid, n, graded.width, graded.height);
-    graded.pixels[n] = vec4f{c.x, c.y, c.z, pixel.w};
-    n++;
+  if (params.grid != 0) {
+    grid(graded, params.grid);
   }
+
+  if (params.sketch) {
+    sketch(graded);
+  }
+
   return graded;
 }
 

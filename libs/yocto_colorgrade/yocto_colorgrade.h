@@ -53,6 +53,7 @@ struct grade_params {
   float grain      = 0.0f;
   int   mosaic     = 0;
   int   grid       = 0;
+  bool  sketch     = false;
 };
 
 // Grading functions
