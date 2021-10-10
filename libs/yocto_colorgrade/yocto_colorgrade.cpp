@@ -35,6 +35,16 @@
 #include <yocto/yocto_color.h>
 #include <yocto/yocto_sampling.h>
 
+// adjust input gamma
+#define CAMPOW 1.0f
+// chunky pixel size
+#define LOWREZ 4.0f
+// color brightnesses
+#define CFULL 1.0f
+#define CHALF 0.8431372549f
+// dither amount, 0 to 1
+#define DITHER 1.0f
+
 // -----------------------------------------------------------------------------
 // COLOR GRADING FUNCTIONS
 // -----------------------------------------------------------------------------
@@ -99,10 +109,6 @@ void grid(color_image& image, int grid) {
   }
 }
 
-bool comparatore(const vec4f a, const vec4f b) {
-  return (a.x + a.y + a.z) < (b.x + b.y + b.z);
-};
-
 void sketch(color_image& image) {
   for (auto& pixel : image.pixels) {
     float r = sin(pixel.x * 6.28 * .9);
@@ -140,22 +146,116 @@ void vhs(color_image& image) {
   }
 }
 
-// void sort(color_image& image, rng_state& rng) {
-//  auto imagec = image;
-//  int  col = image.width, row = image.height;
-//  std::sort(imagec.pixels.begin(), imagec.pixels.end(), comparatore);
-//  for (int i = 0; i < image.width; i+=5) {
-//    if (rand1i(rng, 2) == 1) {
-//      int j_S = rand1i(rng, image.height);
-//      for (int n = 0; n < 50 && i < image.width; n++) {
-//        for (int j = j_S; j < image.height; j++) {
-//          image[{i, j}] = imagec[{i, j}];
-//        }
-//        i++;
-//      }
-//    }
-//  }
-//}
+vec4f smap(vec3f c) {
+  c = pow(c, vec3f{CAMPOW, CAMPOW, CAMPOW});
+  if ((c.x > CHALF) || (c.y > CHALF) || (c.z > CHALF))  // bright?
+  {
+    return vec4f{c.x, c.y, c.z, 1.0};
+  } else {
+    vec3f min_c = min((c / CHALF), vec3f{1.0, 1.0, 1.0});
+    return vec4f{min_c.x, min_c.y, min_c.z, 0.0};
+  }
+}
+
+vec4f bmap(vec3f c) {
+  c = pow(c, vec3f{CAMPOW, CAMPOW, CAMPOW});
+  if ((c.x > CHALF) || (c.y > CHALF) || (c.z > CHALF))  // bright?
+  {
+    vec3f floor_c = vec3f{
+        floor(c.x + 0.5f), floor(c.y + 0.5f), floor(c.z + 0.5f)};
+    return vec4f{floor_c.x, floor_c.y, floor_c.z, 1.0};
+  } else {
+    vec3f floor_c = min(
+        vec3f{floor(c.x / CHALF + 0.5f), floor(c.y / CHALF + 0.5f),
+            floor(c.z / CHALF + 0.5f)},
+        vec3f{1.0, 1.0, 1.0});
+    return vec4f{floor_c.x, floor_c.y, floor_c.z, 0};
+  }
+}
+
+vec3f fmap(vec4f c) {
+  if (c.w >= 0.5) {
+    return xyz(c) * vec3f{CFULL, CFULL, CFULL};
+  } else {
+    return xyz(c) * vec3f{CHALF, CHALF, CHALF};
+  }
+}
+
+void zxspectrum_clash(color_image& image) {
+  auto image_clone = image;
+  for (int i = 0; i < image.width; i++) {
+    for (int j = 0; j < image.height; j++) {
+      vec2f pv = vec2f{floor(i / LOWREZ), floor(j / LOWREZ)};
+      vec2f bv = vec2f{floor(pv.x / 8.0f) * 8.0f, floor(pv.y / 8.0f) * 8.0f};
+      vec2f sv = vec2f{
+          floor(image.width / LOWREZ), floor(image.height / LOWREZ)};
+
+      vec4f min_cs = vec4f{1.0, 1.0, 1.0, 1.0};
+      vec4f max_cs = vec4f{0.0, 0.0, 0.0, 0.0};
+      float bright = 0.0;
+
+      for (int py = 1; py < 8; py++) {
+        for (int px = 0; px < 8; px++) {
+          vec4f cs = bmap(xyz(
+              eval_image(image_clone, (bv + vec2f{px + 0.f, py + 0.f}) / sv)));
+          bright += cs.w;
+          min_cs = min(min_cs, cs);
+          max_cs = max(max_cs, cs);
+        }
+      }
+
+      if (bright >= 24.0) {
+        bright = 1.0;
+      } else {
+        bright = 0.0;
+      }
+
+      if (xyz(max_cs) == xyz(min_cs)) {
+        min_cs = vec4f{0.0, 0.0, 0.0, min_cs.w};
+      }
+
+      if (max_cs.x == 0 && max_cs.y == 0 && max_cs.z == 0) {
+        bright = 0.0;
+        max_cs = vec4f{0.0, 0.0, 1.0, max_cs.w};
+        min_cs = vec4f{0.0, 0.0, 0.0, min_cs.w};
+      }
+
+      vec3f c1 = fmap(vec4f{max_cs.x, max_cs.y, max_cs.z, bright});
+      vec3f c2 = fmap(vec4f{min_cs.x, min_cs.y, min_cs.z, bright});
+
+      vec3f cs = xyz(eval_image(image_clone, pv / sv));
+
+      vec3f d  = (cs + cs) - (c1 + c2);
+      float dd = d.x + d.y + d.z;
+
+      if (fmod(pv.x + pv.y, 2.0f) == 1.0) {
+        image[{i, j}] = vec4f{dd >= -(DITHER * 0.5) ? c1.x : c2.x,
+            dd >= -(DITHER * 0.5) ? c1.y : c2.y,
+            dd >= -(DITHER * 0.5) ? c1.z : c2.z, 1.0};
+      } else {
+        image[{i, j}] = vec4f{dd >= (DITHER * 0.5) ? c1.x : c2.x,
+            dd >= (DITHER * 0.5) ? c1.y : c2.y,
+            dd >= (DITHER * 0.5) ? c1.z : c2.z, 1.0};
+      }
+    }
+  }
+}
+
+void negative(color_image& image) {
+  for (auto& pixel : image.pixels) {
+    auto c = vec3f{1, 1, 1} - xyz(pixel);
+    pixel  = vec4f{c.x, c.y, c.z, pixel.w};
+  }
+}
+
+void mirror(color_image& image, int start) {
+  start = image.width / 100 * start;
+  for (int i = 0; i < image.width - start; i++) {
+    for (int j = 0; j < image.height; j++) {
+      image[{start + i, j}] = image[{abs(start - i) % image.width, j}];
+    }
+  }
+}
 
 color_image grade_image(const color_image& image, const grade_params& params) {
   auto graded = image;
@@ -173,12 +273,13 @@ color_image grade_image(const color_image& image, const grade_params& params) {
     n++;
   }
   if (params.mosaic != 0) mosaic(graded, params.mosaic);
-
   if (params.grid != 0) grid(graded, params.grid);
-
+  // EXTRA
   if (params.sketch) sketch(graded);
-
   if (params.vhs) vhs(graded);
+  if (params.clash) zxspectrum_clash(graded);
+  if (params.negative) negative(graded);
+  if (params.mirror != 0) mirror(graded, params.mirror);
 
   return graded;
 }

@@ -55,6 +55,9 @@ struct grade_params {
   int   grid       = 0;
   bool  sketch     = false;
   bool  vhs        = false;
+  bool  clash      = false;
+  bool  negative   = false;
+  int   mirror     = 0;
 };
 
 // Grading functions
