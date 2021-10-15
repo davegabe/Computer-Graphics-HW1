@@ -157,6 +157,12 @@ void run(const vector<string>& args) {
   add_option(cli, "negative", params.negative, "Negative");
   add_option(cli, "mirror", params.mirror, "Mirror (percentage width)");
   add_option(cli, "stippling", params.stippling, "Stippling");
+  add_option(cli, "nPoints", params.nPoints, "nPoints stippling");
+  add_option(cli, "threshold", params.threshold, "threshold stippling");
+  add_option(cli, "resolution", params.resolution, "resolution stippling");
+  add_option(cli, "iterations", params.iterations, "iterations stippling");
+  add_option(cli, "rMin", params.rMin, "rMin stippling");
+  add_option(cli, "rMax", params.rMax, "rMax stippling");
   if (!parse_cli(cli, args, error)) print_fatal(error);
 
   if (interactive) {

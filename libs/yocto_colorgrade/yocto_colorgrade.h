@@ -60,6 +60,12 @@ struct grade_params {
   bool  negative   = false;
   int   mirror     = 0;
   bool  stippling  = false;
+  int   nPoints    = 10000;
+  int   threshold  = 200;
+  float resolution = 1.f;
+  int   iterations = 10;
+  float rMin       = 1.f;
+  float rMax       = 1.f;
 };
 
 // Grading functions

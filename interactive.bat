@@ -1,1 +1,1 @@
-"bin/ycolorgrade.exe" --interactive --stippling --image tests/toa_heftiba_people.jpg
+"bin/ycolorgrade.exe" --interactive --image tests/figure.png

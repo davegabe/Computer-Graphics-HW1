@@ -32,6 +32,7 @@
 
 #include "yocto_colorgrade.h"
 
+#include <time.h>
 #include <yocto/yocto_color.h>
 #include <yocto/yocto_sampling.h>
 
@@ -43,15 +44,6 @@ using namespace std;
 #define CFULL 1.0f           // color brightnesses
 #define CHALF 0.8431372549f  // color brightnesses
 #define DITHER 1.0f          // dither amount, 0 to 1
-
-#define nPoints 10000
-#define threshold 200
-#define resolution 1.f
-#define iterations 10
-#define rMin 1.f
-#define rMax 1.f
-#define withColor false
-#define verbose false
 
 typedef struct Point {
   float X;
@@ -77,11 +69,6 @@ typedef struct kdNode {
 typedef struct kdTree {
   kdNode*   root;
   rectangle bounds;
-};
-
-typedef struct SearchResult {
-  Point nearest;
-  float distSqd;
 };
 
 // getDist computes the squared euclidean distance to another Point.
@@ -311,7 +298,7 @@ void toGray(color_image& image) {
 }
 
 vector<Point> importanceSampling(
-    int n, const color_image& gray, rng_state& rng) {
+    int n, const color_image& gray, rng_state& rng, int threshold) {
   map<int, vector<Point>> hist;
   vector<Point>           pts;
   vector<int>             roulette;
@@ -337,9 +324,12 @@ vector<Point> importanceSampling(
   sort(s_roulette.begin(), s_roulette.end());
 
   for (int i = 0; i < n; i++) {
-    auto ball = rand1i(rng, roulette[roulette.size() - 1]);
-    int  bin  = upper_bound(s_roulette.begin(), s_roulette.end(), ball) -
-              s_roulette.begin();
+    int bin;
+    do {
+      auto ball = rand1i(rng, roulette[roulette.size() - 1]);
+      bin       = upper_bound(s_roulette.begin(), s_roulette.end(), ball) -
+            s_roulette.begin();
+    } while (hist[bin].size() == 0);
     auto p = hist[bin][rand1i(rng, hist[bin].size())];
     p.X += rand1f(rng);
     p.Y += rand1f(rng);
@@ -388,7 +378,8 @@ kdTree makeKdTree(vector<Point> pts, rectangle bounds) {
   };
 }
 
-SearchResult search(kdNode* node, Point target, rectangle r, float maxDistSqd) {
+tuple<Point, float> search(
+    kdNode* node, Point target, rectangle r, float maxDistSqd) {
   if (node == NULL) {
     return {Point{}, numeric_limits<float>::infinity()};
   }
@@ -440,6 +431,7 @@ SearchResult search(kdNode* node, Point target, rectangle r, float maxDistSqd) {
   }
 
   d = getDist(node->p, target);
+
   if (d < distSqd) {
     nearest    = node->p;
     distSqd    = d;
@@ -533,17 +525,18 @@ void drawCircle(color_image& image, int start_X, int start_Y, int r) {
   }
 }
 
-void stippling(color_image& image, rng_state& rng) {
+void stippling(color_image& image, rng_state& rng, int nPoints, int threshold,
+    float resolution, int iterations, float rMin, float rMax) {
   auto gray = image;
   toGray(gray);
   auto new_image = make_image(gray.width, gray.height, false);
   for (auto& pixel : new_image.pixels) pixel = vec4f{1, 1, 1, 1};
   auto bounds = rectangle{
       Point{0, 0}, Point{(float)gray.width, (float)gray.height}};
-  int  x                     = nPoints;
-  auto points                = importanceSampling(nPoints, gray, rng);
-  auto pdf                   = makePDF(gray);
-  auto step                  = 1 / resolution;
+  int  x      = nPoints;
+  auto points = importanceSampling(nPoints, gray, rng, threshold);
+  auto pdf    = makePDF(gray);
+  auto step   = 1 / resolution;
   auto [stipples, densities] = getCentroids(points, pdf, bounds, step);
   for (int i = 1; i < iterations - 1; i++) {
     auto [new_stipples, new_densities] = getCentroids(
@@ -552,7 +545,6 @@ void stippling(color_image& image, rng_state& rng) {
     densities = new_densities;
   }
   auto radiuses = rescaleFloat(densities, rMin, rMax);
-
   for (int i = 0; i < stipples.size(); i++) {
     drawCircle(new_image, stipples[i].X, stipples[i].Y, radiuses[i]);
   }
@@ -562,7 +554,7 @@ void stippling(color_image& image, rng_state& rng) {
 color_image grade_image(const color_image& image, const grade_params& params) {
   auto graded = image;
   int  n      = 0;
-  auto rng    = make_rng(172784);
+  auto rng    = make_rng(time(NULL));
   for (auto pixel : graded.pixels) {
     auto c = xyz(pixel);
     c      = toneMapping(c, params.exposure, params.filmic, params.srgb);
@@ -584,7 +576,9 @@ color_image grade_image(const color_image& image, const grade_params& params) {
   if (params.clash) zxspectrum_clash(graded);
   if (params.negative) negative(graded);
   if (params.mirror != 0) mirror(graded, params.mirror);
-  if (params.stippling) stippling(graded, rng);
+  if (params.stippling)
+    stippling(graded, rng, params.nPoints, params.threshold, params.resolution,
+        params.iterations, params.rMin, params.rMax);
 
   return graded;
 }
