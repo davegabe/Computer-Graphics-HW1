@@ -44,7 +44,7 @@ using namespace std;
 #define CHALF 0.8431372549f  // color brightnesses
 #define DITHER 1.0f          // dither amount, 0 to 1
 
-#define nPoints 500
+#define nPoints 10000
 #define threshold 200
 #define resolution 1.f
 #define iterations 10
@@ -53,17 +53,12 @@ using namespace std;
 #define withColor false
 #define verbose false
 
-// -----------------------------------------------------------------------------
-// POINT
-// -----------------------------------------------------------------------------
-
-// A Point represents an (X, Y) pair.
 typedef struct Point {
   float X;
   float Y;
 
   bool operator<(const Point& other) const {
-    return (this->X < other.X || (this->X == other.X && this->Y < other.Y));
+    return (X < other.X || (X == other.X && Y < other.Y));
   }
 };
 
@@ -89,37 +84,11 @@ typedef struct SearchResult {
   float distSqd;
 };
 
-typedef struct FindNearestNeighbourResult {
-  Point best;
-  float bestSqd;
-};
-
-/*
-string pointToString(Point p) {
-  string mystring;
-  sprintf(mystring, "(%.2f, %.2f)", p.X, p.Y);
-
-  return mystring;
-}
-*/
-
 // getDist computes the squared euclidean distance to another Point.
 float getDist(Point p, Point q) {
   auto dx = p.X - q.X;
   auto dy = p.Y - q.Y;
   return dx * dx + dy * dy;
-}
-
-// typedef vector<Point> Points;
-
-// sortByX sort points inplace by their x-axis.
-void sortByX(vector<Point> pts) {
-  sort(pts.begin(), pts.end(), [](Point p, Point q) { return p.X < q.X; });
-}
-
-// sortByY sort Points inplace by their y-axis.
-void sortByY(vector<Point> pts) {
-  sort(pts.begin(), pts.end(), [](Point p, Point q) { return p.Y < q.Y; });
 }
 
 // -----------------------------------------------------------------------------
@@ -346,26 +315,31 @@ vector<Point> importanceSampling(
   map<int, vector<Point>> hist;
   vector<Point>           pts;
   vector<int>             roulette;
+
   for (int i = 0; i < gray.width; i++) {
     for (int j = 0; j < gray.height; j++) {
       auto intensity = xyz(gray[{i, j}]).x * 256;
       if (intensity <= threshold) {
-        hist[intensity].push_back(Point{(float)i, (float)j});
+        hist[intensity].insert(
+            hist[intensity].begin(), Point{(float)i, (float)j});
       }
     }
   }
+
   roulette.insert(roulette.begin(), 256);
+
   for (int i = 1; i < threshold + 1; i++) {
     roulette.insert(
         roulette.begin() + i, roulette[i - 1] + (256 - i) * hist[i].size());
   }
+
   auto s_roulette = roulette;
   sort(s_roulette.begin(), s_roulette.end());
+
   for (int i = 0; i < n; i++) {
     auto ball = rand1i(rng, roulette[roulette.size() - 1]);
     int  bin  = upper_bound(s_roulette.begin(), s_roulette.end(), ball) -
               s_roulette.begin();
-    printf("%d %d %d %d %d  AAAAAA", ball, bin, hist[0].size());
     auto p = hist[bin][rand1i(rng, hist[bin].size())];
     p.X += rand1f(rng);
     p.Y += rand1f(rng);
@@ -388,19 +362,23 @@ kdNode* split(vector<Point> pts, bool splitByX) {
   if (pts.size() == 0) {
     return NULL;
   }
+  if (pts.size() == 1) {
+    return new kdNode{pts[0], splitByX, NULL, NULL};
+  }
 
   if (splitByX) {
-    sortByX(pts);
+    sort(pts.begin(), pts.end(), [](Point p, Point q) { return p.X < q.X; });
   } else {
-    sortByY(pts);
+    sort(pts.begin(), pts.end(), [](Point p, Point q) { return p.Y < q.Y; });
   }
 
   float         med = pts.size() / 2;
-  vector<Point> left_pts(pts.begin(), pts.begin() + pts.size() / 2);
-  vector<Point> right_pts(pts.begin() + pts.size() / 2 + 1, pts.end());
-  kdNode        result = {pts[med], splitByX, split(left_pts, !splitByX),
+  vector<Point> left_pts(pts.begin(), pts.begin() + med);
+  vector<Point> right_pts(pts.begin() + med, pts.end());
+
+  auto result = new kdNode{pts[med], splitByX, split(left_pts, !splitByX),
       split(right_pts, !splitByX)};
-  return &result;
+  return result;
 }
 
 kdTree makeKdTree(vector<Point> pts, rectangle bounds) {
@@ -410,23 +388,19 @@ kdTree makeKdTree(vector<Point> pts, rectangle bounds) {
   };
 }
 
-SearchResult* search(
-    kdNode* node, Point target, rectangle r, float maxDistSqd) {
+SearchResult search(kdNode* node, Point target, rectangle r, float maxDistSqd) {
   if (node == NULL) {
-    SearchResult result = {Point{}, numeric_limits<float>::infinity()};
-    return &result;
+    return {Point{}, numeric_limits<float>::infinity()};
   }
+
   bool      targetInLeft;
   rectangle leftBox, rightBox;
-  kdNode *  nearestNode, furthestNode;
-
+  kdNode *  nearestNode, *furthestNode;
   rectangle nearestBox, furthestBox;
 
   if (node->splitByX) {
-    leftBox = {r.min, Point{node->p.X, r.max.Y}};
-
-    rightBox = {Point{node->p.X, r.min.Y}, r.max};
-
+    leftBox      = {r.min, Point{node->p.X, r.max.Y}};
+    rightBox     = {Point{node->p.X, r.min.Y}, r.max};
     targetInLeft = target.X <= node->p.X;
   } else {
     leftBox      = {r.min, Point{r.max.X, node->p.Y}};
@@ -435,19 +409,18 @@ SearchResult* search(
   }
 
   if (targetInLeft) {
-    auto nearestNode  = node->left;
-    auto nearestBox   = leftBox;
-    auto furthestNode = node->right;
-    auto furthestBox  = rightBox;
+    nearestNode  = node->left;
+    nearestBox   = leftBox;
+    furthestNode = node->right;
+    furthestBox  = rightBox;
   } else {
-    auto nearestNode  = node->right;
-    auto nearestBox   = rightBox;
-    auto furthestNode = node->left;
-    auto furthestBox  = leftBox;
+    nearestNode  = node->right;
+    nearestBox   = rightBox;
+    furthestNode = node->left;
+    furthestBox  = leftBox;
   }
 
-  SearchResult* result    = search(nearestNode, target, nearestBox, maxDistSqd);
-  auto [nearest, distSqd] = *result;
+  auto [nearest, distSqd] = search(nearestNode, target, nearestBox, maxDistSqd);
 
   if (distSqd < maxDistSqd) {
     maxDistSqd = distSqd;
@@ -463,7 +436,7 @@ SearchResult* search(
   d *= d;
 
   if (d > maxDistSqd) {
-    return NULL;
+    return {nearest, distSqd};
   }
 
   d = getDist(node->p, target);
@@ -473,22 +446,20 @@ SearchResult* search(
     maxDistSqd = distSqd;
   }
 
-  result = search(&furthestNode, target, furthestBox, maxDistSqd);
-  auto [tmpNearest, tmpSqd] = *result;
+  auto [tmpNearest, tmpSqd] = search(
+      furthestNode, target, furthestBox, maxDistSqd);
 
   if (tmpSqd < distSqd) {
     nearest = tmpNearest;
     distSqd = tmpSqd;
   }
-  return NULL;
+  return {nearest, distSqd};
 }
 
-FindNearestNeighbourResult findNearestNeighbour(Point p, kdTree t) {
-  SearchResult* result = search(
-      t.root, p, t.bounds, std::numeric_limits<float>::infinity());
-  auto [nearest, distSqd] = *result;
-
-  return {nearest, distSqd};
+Point findNearestNeighbour(Point p, kdTree t) {
+  auto [nearest, distSqd] = search(
+      t.root, p, t.bounds, numeric_limits<float>::infinity());
+  return nearest;
 }
 
 tuple<vector<Point>, vector<float>> getCentroids(vector<Point> sites,
@@ -501,19 +472,19 @@ tuple<vector<Point>, vector<float>> getCentroids(vector<Point> sites,
     siteCentroids[p] = Point{};
   }
 
-  auto kd = makeKdTree(sites, bounds);  // OK
+  auto kd = makeKdTree(sites, bounds);
 
   for (int i = bounds.min.X; i < bounds.max.X; i += step) {
     for (int j = bounds.min.Y; j < bounds.max.Y; j += step) {
       auto  p        = Point{(float)i, (float)j};
-      auto  d        = findNearestNeighbour(p, kd);
+      auto  best     = findNearestNeighbour(p, kd);
       auto  w        = pdf[int(i)][int(j)];
-      Point centroid = siteCentroids[d.best];
+      Point centroid = siteCentroids[best];
       centroid.X += w * p.X;
       centroid.Y += w * p.Y;
-      siteCentroids[d.best] = centroid;
-      siteIntensities[d.best] += w;
-      siteNPoints[d.best]++;
+      siteCentroids[best] = centroid;
+      siteIntensities[best] += w;
+      siteNPoints[best]++;
     }
   }
 
@@ -525,8 +496,9 @@ tuple<vector<Point>, vector<float>> getCentroids(vector<Point> sites,
     auto centroid = siteCentroids[site];
     centroid.X /= density;
     centroid.Y /= density;
-    centroids[i] = centroid;
-    densities[i] = siteIntensities[site] / siteNPoints[site];
+    centroids.insert(centroids.begin() + i, centroid);
+    densities.insert(
+        densities.begin() + i, siteIntensities[site] / siteNPoints[site]);
     i++;
   }
 
@@ -542,7 +514,8 @@ vector<float> rescaleFloat(vector<float> floats, float newMin, float newMax) {
     }
   }
   for (int i = 0; i < floats.size(); i++) {
-    rescaled[i] = newMin + (newMax - newMin) * floats[i] / oldMin;
+    rescaled.insert(
+        rescaled.begin() + i, newMin + (newMax - newMin) * floats[i] / oldMin);
   }
   return rescaled;
 }
@@ -554,7 +527,7 @@ void drawCircle(color_image& image, int start_X, int start_Y, int r) {
          j++) {
       if ((i - start_X) * (i - start_X) + (j - start_Y) * (j - start_Y) <=
           r * r) {
-        image[{i, j}] = vec4f{0, 0, 0, image[{i, j}].w};
+        image[{i, j}] = vec4f{0, 0, 0, 1};
       }
     }
   }
@@ -564,14 +537,15 @@ void stippling(color_image& image, rng_state& rng) {
   auto gray = image;
   toGray(gray);
   auto new_image = make_image(gray.width, gray.height, false);
-  auto bounds    = rectangle{
+  for (auto& pixel : new_image.pixels) pixel = vec4f{1, 1, 1, 1};
+  auto bounds = rectangle{
       Point{0, 0}, Point{(float)gray.width, (float)gray.height}};
-  int  x      = nPoints;
-  auto points = importanceSampling(nPoints, gray, rng);
+  int  x                     = nPoints;
+  auto points                = importanceSampling(nPoints, gray, rng);
   auto pdf                   = makePDF(gray);
   auto step                  = 1 / resolution;
   auto [stipples, densities] = getCentroids(points, pdf, bounds, step);
-  /*for (int i = 1; i < iterations - 1; i++) {
+  for (int i = 1; i < iterations - 1; i++) {
     auto [new_stipples, new_densities] = getCentroids(
         stipples, pdf, bounds, step);
     stipples  = new_stipples;
@@ -579,10 +553,9 @@ void stippling(color_image& image, rng_state& rng) {
   }
   auto radiuses = rescaleFloat(densities, rMin, rMax);
 
-
   for (int i = 0; i < stipples.size(); i++) {
     drawCircle(new_image, stipples[i].X, stipples[i].Y, radiuses[i]);
-  }*/
+  }
   image = new_image;
 }
 
