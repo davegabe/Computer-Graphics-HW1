@@ -106,11 +106,13 @@ void run_interactively(
       edited += draw_glslider("grain", params.grain, 0, 1);
       edited += draw_glslider("mosaic", params.mosaic, 0, 64);
       edited += draw_glslider("grid", params.grid, 0, 64);
+      edited += draw_glcheckbox("grey", params.grey);
       edited += draw_glcheckbox("sketch", params.sketch);
       edited += draw_glcheckbox("vhs", params.vhs);
       edited += draw_glcheckbox("clash", params.clash);
       edited += draw_glcheckbox("negative", params.negative);
       edited += draw_glslider("mirror", params.mirror, 0, 100);
+      edited += draw_glcheckbox("stippling", params.stippling);
       end_glheader();
       if (edited) {
         display = grade_image(image, params);
@@ -148,11 +150,13 @@ void run(const vector<string>& args) {
   add_option(cli, "grain", params.grain, "Grain strength");
   add_option(cli, "mosaic", params.mosaic, "Mosaic size (pixels)");
   add_option(cli, "grid", params.grid, "Grid size (pixels)");
+  add_option(cli, "grey", params.grey, "Grey");
   add_option(cli, "sketch", params.sketch, "Sketch");
   add_option(cli, "vhs", params.vhs, "VHS");
   add_option(cli, "clash", params.clash, "Attribute clash");
   add_option(cli, "negative", params.negative, "Negative");
   add_option(cli, "mirror", params.mirror, "Mirror (percentage width)");
+  add_option(cli, "stippling", params.stippling, "Stippling");
   if (!parse_cli(cli, args, error)) print_fatal(error);
 
   if (interactive) {

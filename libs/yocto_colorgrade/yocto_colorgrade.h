@@ -53,11 +53,13 @@ struct grade_params {
   float grain      = 0.0f;
   int   mosaic     = 0;
   int   grid       = 0;
+  bool  grey       = false;
   bool  sketch     = false;
   bool  vhs        = false;
   bool  clash      = false;
   bool  negative   = false;
   int   mirror     = 0;
+  bool  stippling  = false;
 };
 
 // Grading functions

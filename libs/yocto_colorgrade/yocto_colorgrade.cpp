@@ -35,15 +35,92 @@
 #include <yocto/yocto_color.h>
 #include <yocto/yocto_sampling.h>
 
-// adjust input gamma
-#define CAMPOW 1.0f
-// chunky pixel size
-#define LOWREZ 4.0f
-// color brightnesses
-#define CFULL 1.0f
-#define CHALF 0.8431372549f
-// dither amount, 0 to 1
-#define DITHER 1.0f
+#include <map>
+using namespace std;
+
+#define CAMPOW 1.0f          // adjust input gamma
+#define LOWREZ 4.0f          // chunky pixel size
+#define CFULL 1.0f           // color brightnesses
+#define CHALF 0.8431372549f  // color brightnesses
+#define DITHER 1.0f          // dither amount, 0 to 1
+
+#define nPoints 500
+#define threshold 200
+#define resolution 1.f
+#define iterations 10
+#define rMin 1.f
+#define rMax 1.f
+#define withColor false
+#define verbose false
+
+// -----------------------------------------------------------------------------
+// POINT
+// -----------------------------------------------------------------------------
+
+// A Point represents an (X, Y) pair.
+typedef struct Point {
+  float X;
+  float Y;
+
+  bool operator<(const Point& other) const {
+    return (this->X < other.X || (this->X == other.X && this->Y < other.Y));
+  }
+};
+
+typedef struct rectangle {
+  Point min;
+  Point max;
+};
+
+typedef struct kdNode {
+  Point   p;
+  bool    splitByX;
+  kdNode* left;
+  kdNode* right;
+};
+
+typedef struct kdTree {
+  kdNode*   root;
+  rectangle bounds;
+};
+
+typedef struct SearchResult {
+  Point nearest;
+  float distSqd;
+};
+
+typedef struct FindNearestNeighbourResult {
+  Point best;
+  float bestSqd;
+};
+
+/*
+string pointToString(Point p) {
+  string mystring;
+  sprintf(mystring, "(%.2f, %.2f)", p.X, p.Y);
+
+  return mystring;
+}
+*/
+
+// getDist computes the squared euclidean distance to another Point.
+float getDist(Point p, Point q) {
+  auto dx = p.X - q.X;
+  auto dy = p.Y - q.Y;
+  return dx * dx + dy * dy;
+}
+
+// typedef vector<Point> Points;
+
+// sortByX sort points inplace by their x-axis.
+void sortByX(vector<Point> pts) {
+  sort(pts.begin(), pts.end(), [](Point p, Point q) { return p.X < q.X; });
+}
+
+// sortByY sort Points inplace by their y-axis.
+void sortByY(vector<Point> pts) {
+  sort(pts.begin(), pts.end(), [](Point p, Point q) { return p.Y < q.Y; });
+}
 
 // -----------------------------------------------------------------------------
 // COLOR GRADING FUNCTIONS
@@ -257,6 +334,258 @@ void mirror(color_image& image, int start) {
   }
 }
 
+void toGray(color_image& image) {
+  for (auto& pixel : image.pixels) {
+    auto c = pixel.x * 0.2989f + pixel.y * 0.5870f + pixel.z * 0.1140f;
+    pixel  = vec4f{c, c, c, pixel.w};
+  }
+}
+
+vector<Point> importanceSampling(
+    int n, const color_image& gray, rng_state& rng) {
+  map<int, vector<Point>> hist;
+  vector<Point>           pts;
+  vector<int>             roulette;
+  for (int i = 0; i < gray.width; i++) {
+    for (int j = 0; j < gray.height; j++) {
+      auto intensity = xyz(gray[{i, j}]).x * 256;
+      if (intensity <= threshold) {
+        hist[intensity].push_back(Point{(float)i, (float)j});
+      }
+    }
+  }
+  roulette.insert(roulette.begin(), 256);
+  for (int i = 1; i < threshold + 1; i++) {
+    roulette.insert(
+        roulette.begin() + i, roulette[i - 1] + (256 - i) * hist[i].size());
+  }
+  auto s_roulette = roulette;
+  sort(s_roulette.begin(), s_roulette.end());
+  for (int i = 0; i < n; i++) {
+    auto ball = rand1i(rng, roulette[roulette.size() - 1]);
+    int  bin  = upper_bound(s_roulette.begin(), s_roulette.end(), ball) -
+              s_roulette.begin();
+    printf("%d %d %d %d %d  AAAAAA", ball, bin, hist[0].size());
+    auto p = hist[bin][rand1i(rng, hist[bin].size())];
+    p.X += rand1f(rng);
+    p.Y += rand1f(rng);
+    pts.insert(pts.begin() + i, p);
+  }
+  return pts;
+}
+
+vector<vector<float>> makePDF(const color_image& gray) {
+  vector<vector<float>> pdf(gray.width, vector<float>(gray.height));
+  for (int i = 0; i < gray.width; i++) {
+    for (int j = 0; j < gray.height; j++) {
+      pdf[i][j] = 1.0 - gray[{i, j}].y;
+    }
+  }
+  return pdf;
+}
+
+kdNode* split(vector<Point> pts, bool splitByX) {
+  if (pts.size() == 0) {
+    return NULL;
+  }
+
+  if (splitByX) {
+    sortByX(pts);
+  } else {
+    sortByY(pts);
+  }
+
+  float         med = pts.size() / 2;
+  vector<Point> left_pts(pts.begin(), pts.begin() + pts.size() / 2);
+  vector<Point> right_pts(pts.begin() + pts.size() / 2 + 1, pts.end());
+  kdNode        result = {pts[med], splitByX, split(left_pts, !splitByX),
+      split(right_pts, !splitByX)};
+  return &result;
+}
+
+kdTree makeKdTree(vector<Point> pts, rectangle bounds) {
+  return {
+      split(pts, true),
+      bounds,
+  };
+}
+
+SearchResult* search(
+    kdNode* node, Point target, rectangle r, float maxDistSqd) {
+  if (node == NULL) {
+    SearchResult result = {Point{}, numeric_limits<float>::infinity()};
+    return &result;
+  }
+  bool      targetInLeft;
+  rectangle leftBox, rightBox;
+  kdNode *  nearestNode, furthestNode;
+
+  rectangle nearestBox, furthestBox;
+
+  if (node->splitByX) {
+    leftBox = {r.min, Point{node->p.X, r.max.Y}};
+
+    rightBox = {Point{node->p.X, r.min.Y}, r.max};
+
+    targetInLeft = target.X <= node->p.X;
+  } else {
+    leftBox      = {r.min, Point{r.max.X, node->p.Y}};
+    rightBox     = {Point{r.min.X, node->p.Y}, r.max};
+    targetInLeft = target.Y <= node->p.Y;
+  }
+
+  if (targetInLeft) {
+    auto nearestNode  = node->left;
+    auto nearestBox   = leftBox;
+    auto furthestNode = node->right;
+    auto furthestBox  = rightBox;
+  } else {
+    auto nearestNode  = node->right;
+    auto nearestBox   = rightBox;
+    auto furthestNode = node->left;
+    auto furthestBox  = leftBox;
+  }
+
+  SearchResult* result    = search(nearestNode, target, nearestBox, maxDistSqd);
+  auto [nearest, distSqd] = *result;
+
+  if (distSqd < maxDistSqd) {
+    maxDistSqd = distSqd;
+  }
+
+  float d;
+
+  if (node->splitByX) {
+    d = node->p.X - target.X;
+  } else {
+    d = node->p.Y - target.Y;
+  }
+  d *= d;
+
+  if (d > maxDistSqd) {
+    return NULL;
+  }
+
+  d = getDist(node->p, target);
+  if (d < distSqd) {
+    nearest    = node->p;
+    distSqd    = d;
+    maxDistSqd = distSqd;
+  }
+
+  result = search(&furthestNode, target, furthestBox, maxDistSqd);
+  auto [tmpNearest, tmpSqd] = *result;
+
+  if (tmpSqd < distSqd) {
+    nearest = tmpNearest;
+    distSqd = tmpSqd;
+  }
+  return NULL;
+}
+
+FindNearestNeighbourResult findNearestNeighbour(Point p, kdTree t) {
+  SearchResult* result = search(
+      t.root, p, t.bounds, std::numeric_limits<float>::infinity());
+  auto [nearest, distSqd] = *result;
+
+  return {nearest, distSqd};
+}
+
+tuple<vector<Point>, vector<float>> getCentroids(vector<Point> sites,
+    vector<vector<float>> pdf, rectangle bounds, float step) {
+  map<Point, Point> siteCentroids;
+  map<Point, float> siteIntensities;
+  map<Point, float> siteNPoints;
+
+  for (auto p : sites) {
+    siteCentroids[p] = Point{};
+  }
+
+  auto kd = makeKdTree(sites, bounds);  // OK
+
+  for (int i = bounds.min.X; i < bounds.max.X; i += step) {
+    for (int j = bounds.min.Y; j < bounds.max.Y; j += step) {
+      auto  p        = Point{(float)i, (float)j};
+      auto  d        = findNearestNeighbour(p, kd);
+      auto  w        = pdf[int(i)][int(j)];
+      Point centroid = siteCentroids[d.best];
+      centroid.X += w * p.X;
+      centroid.Y += w * p.Y;
+      siteCentroids[d.best] = centroid;
+      siteIntensities[d.best] += w;
+      siteNPoints[d.best]++;
+    }
+  }
+
+  vector<Point> centroids;
+  vector<float> densities;
+  int           i = 0;
+
+  for (const auto& [site, density] : siteIntensities) {
+    auto centroid = siteCentroids[site];
+    centroid.X /= density;
+    centroid.Y /= density;
+    centroids[i] = centroid;
+    densities[i] = siteIntensities[site] / siteNPoints[site];
+    i++;
+  }
+
+  return {centroids, densities};
+}
+
+vector<float> rescaleFloat(vector<float> floats, float newMin, float newMax) {
+  vector<float> rescaled;
+  auto          oldMin = floats[0];
+  for (auto n : floats) {
+    if (n < oldMin) {
+      oldMin = n;
+    }
+  }
+  for (int i = 0; i < floats.size(); i++) {
+    rescaled[i] = newMin + (newMax - newMin) * floats[i] / oldMin;
+  }
+  return rescaled;
+}
+
+void drawCircle(color_image& image, int start_X, int start_Y, int r) {
+  for (int i = max(start_X - r, 0); i <= min(start_X + r, image.width - 1);
+       i++) {
+    for (int j = max(start_Y - r, 0); j <= min(start_Y + r, image.height - 1);
+         j++) {
+      if ((i - start_X) * (i - start_X) + (j - start_Y) * (j - start_Y) <=
+          r * r) {
+        image[{i, j}] = vec4f{0, 0, 0, image[{i, j}].w};
+      }
+    }
+  }
+}
+
+void stippling(color_image& image, rng_state& rng) {
+  auto gray = image;
+  toGray(gray);
+  auto new_image = make_image(gray.width, gray.height, false);
+  auto bounds    = rectangle{
+      Point{0, 0}, Point{(float)gray.width, (float)gray.height}};
+  int  x      = nPoints;
+  auto points = importanceSampling(nPoints, gray, rng);
+  auto pdf                   = makePDF(gray);
+  auto step                  = 1 / resolution;
+  auto [stipples, densities] = getCentroids(points, pdf, bounds, step);
+  /*for (int i = 1; i < iterations - 1; i++) {
+    auto [new_stipples, new_densities] = getCentroids(
+        stipples, pdf, bounds, step);
+    stipples  = new_stipples;
+    densities = new_densities;
+  }
+  auto radiuses = rescaleFloat(densities, rMin, rMax);
+
+
+  for (int i = 0; i < stipples.size(); i++) {
+    drawCircle(new_image, stipples[i].X, stipples[i].Y, radiuses[i]);
+  }*/
+  image = new_image;
+}
+
 color_image grade_image(const color_image& image, const grade_params& params) {
   auto graded = image;
   int  n      = 0;
@@ -274,12 +603,15 @@ color_image grade_image(const color_image& image, const grade_params& params) {
   }
   if (params.mosaic != 0) mosaic(graded, params.mosaic);
   if (params.grid != 0) grid(graded, params.grid);
+
   // EXTRA
+  if (params.grey) toGray(graded);
   if (params.sketch) sketch(graded);
   if (params.vhs) vhs(graded);
   if (params.clash) zxspectrum_clash(graded);
   if (params.negative) negative(graded);
   if (params.mirror != 0) mirror(graded, params.mirror);
+  if (params.stippling) stippling(graded, rng);
 
   return graded;
 }
